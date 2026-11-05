@@ -1,0 +1,6 @@
+config.json
+joomla-offline/
+manual/
+*.zip
+__pycache__/
+*.pyc
