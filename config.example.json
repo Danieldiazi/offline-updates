@@ -1,0 +1,18 @@
+{
+  "url_base": "http://servidor-interno/joomla-offline",
+  "carpeta_salida": "joomla-offline",
+  "ramas_joomla": [
+    "6"
+  ],
+  "idiomas": [
+    "es-ES"
+  ],
+  "conservar_versiones_anteriores": false,
+  "extensiones": [
+    {
+      "nombre": "Attachments",
+      "tipo": "xml",
+      "url": "https://raw.githubusercontent.com/jmcameron/attachments/master/pkg_attachments/update_pkg.xml"
+    }
+  ]
+}
