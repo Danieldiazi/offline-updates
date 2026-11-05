@@ -185,3 +185,7 @@ Si falla un changelog declarado o no contiene la versión requerida, omite su en
 ### Notas alternativas para fuentes XML de GitHub
 
 Si falta `changelogurl` y el ZIP se descarga de github.com/propietario/repositorio/releases/download/tag/, el script consulta las notas de ese tag exacto. Solo las publica si el tag (sin prefijo v/V) coincide con la versión del XML y la release tiene notas y no es preliminar ni borrador. No usa la última release indiscriminadamente. El XML original sigue determinando el paquete y la compatibilidad. Esta alternativa no se aplica al core, que tiene otro procesamiento.
+
+### Notas de paquetes manuales
+
+Junto a `manual/plantilla-2.1.zip`, puedes crear `manual/plantilla-2.1.changelog.txt` en UTF-8 con las novedades. Funciona también en subcarpetas. El script genera el XML y el enlace local para el botón Registro de cambios de Joomla, usando la identidad y versión del manifiesto del ZIP seleccionado. Solo publica notas de la versión más alta ofrecida. Sin archivo o con texto vacío, ofrece la actualización sin notas. Los textos se guardan como texto XML escapado, sin convertir Markdown a HTML. Si el archivo no se puede leer, registra la incidencia y continúa con el paquete. Con `manual_en_actualizaciones: false` no genera estos XML. Al retirar las notas, desaparecen el changelog generado y su enlace en la siguiente ejecución.
