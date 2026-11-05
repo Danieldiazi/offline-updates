@@ -89,7 +89,7 @@ La API de GitHub admite 60 consultas por hora sin autenticar, de sobra para esto
 
 ### Paquetes descargados a mano
 
-Algunas extensiones no tienen servidor de actualizaciones. Las plantillas de JoomLead (Wilson, Minima…), por ejemplo, se descargan desde su área de cliente. Para llevarlas junto al resto:
+Algunas extensiones no tienen servidor de actualizaciones y sus paquetes deben descargarse a mano. Para llevarlas junto al resto:
 
 1. Descárgalas a mano y déjalas en la carpeta `manual/`, junto a `config.json`. Puedes organizarlas en subcarpetas.
 2. Ejecuta el script. Las copia tal cual a `joomla-offline/manual/` y las lista en `LEEME.txt`, en `index.html` y en el resumen de pantalla.
@@ -98,7 +98,7 @@ Algunas extensiones no tienen servidor de actualizaciones. Las plantillas de Joo
 
 Junto a cada ZIP, el resumen indica qué se hace con él:
 
-- `en Actualizar: template jl_wilson 2.1.1`: se ofrece como actualización.
+- `en Actualizar: template plantilla_ejemplo 2.1.1`: se ofrece como actualización.
 - `versión antigua, no se ofrece`: hay otra más nueva de la misma extensión.
 - `solo instalación manual (…)`: el ZIP no tiene un manifiesto de Joomla legible.
 
