@@ -1115,6 +1115,25 @@ class Espejo:
             for alg in ("sha256", "sha384", "sha512"):
                 partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
             partes += ["  </update>", "</updates>"]
+            ruta_notas = os.path.splitext(os.path.join(self.origen_manual, *rel.split("/")[1:]))[0] + ".changelog.txt"
+            if os.path.isfile(ruta_notas):
+                try:
+                    with open(ruta_notas, encoding="utf-8-sig") as f:
+                        notas = f.read().strip()
+                    if notas:
+                        cambios = ET.Element("changelogs")
+                        cambio = ET.SubElement(cambios, "changelog")
+                        for k, valor in (("element", element), ("type", tipo), ("version", version)):
+                            ET.SubElement(cambio, k).text = valor
+                        ET.SubElement(ET.SubElement(cambio, "note"), "item").text = notas
+                        rel_notas = carpeta + "/" + os.path.splitext(nombre_det)[0] + "-changelog.xml"
+                        self.escribir(rel_notas, '<?xml version="1.0" encoding="utf-8"?>\n'
+                                      + ET.tostring(cambios, encoding="unicode") + "\n")
+                        partes.insert(-2, "    <changelogurl>%s</changelogurl>" % escape(self.url(rel_notas)))
+                except (OSError, UnicodeError) as e:
+                    aviso = "%s: no se pudieron leer las notas manuales (%s)" % (rel, e)
+                    log("   AVISO: " + aviso)
+                    self.errores.append(aviso)
             self.escribir("%s/%s" % (carpeta, nombre_det), "\n".join(partes) + "\n")
             attrs = {"name": info["nombre"] or element, "element": element, "type": tipo,
                      "client": cliente, "version": version, "targetplatformversion": tp,
