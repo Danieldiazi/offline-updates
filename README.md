@@ -1,5 +1,7 @@
 # Offline Updates
 
+Español | [English](README.en.md)
+
 Espejo de actualizaciones de Joomla para entornos **sin acceso a internet**.
 
 Se ejecuta en una máquina con internet y genera una carpeta que se copia (por USB, por ejemplo) a la red aislada. Esa carpeta sirve para dos cosas:
