@@ -261,7 +261,7 @@ The tests need no network access: they simulate every source (core, multi-branch
 python -m unittest discover -s tests -v
 ```
 
-They also run on GitHub Actions for every change: Linux and Windows, Python 3.9 and 3.13, plus Python 3.8 on Windows.
+They also run on GitHub Actions for every change: Python 3.8 on Windows, 3.10 on Linux and 3.13 on both.
 
 ## License
 
