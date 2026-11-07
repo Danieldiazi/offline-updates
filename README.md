@@ -222,7 +222,7 @@ Las pruebas no necesitan conexión: simulan todas las fuentes (core, XML con var
 python -m unittest discover -s tests -v
 ```
 
-Se ejecutan también en GitHub Actions, en Linux y Windows, con cada cambio.
+Se ejecutan también en GitHub Actions con cada cambio: Linux y Windows con Python 3.9 y 3.13, y Python 3.8 en Windows.
 
 ## Licencia
 

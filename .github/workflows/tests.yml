@@ -13,11 +13,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.8", "3.13"]
+        python: ["3.9", "3.13"]
+        include:
+          # Python 3.8 is the documented minimum, but it is no longer available on
+          # current Ubuntu runners; it is still tested on Windows.
+          - os: windows-latest
+            python: "3.8"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
