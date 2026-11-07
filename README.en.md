@@ -147,7 +147,7 @@ Write the release notes in the text file. The script generates a Joomla changelo
 - Subfolders are supported.
 - Only notes for the highest offered version are published.
 - Missing or empty notes leave the update available without a changelog.
-- Notes are escaped as XML text; Markdown is not converted to HTML.
+- Notes are converted as described in [How notes are converted](#how-notes-are-converted).
 - Unreadable notes are reported without blocking the package.
 - Removing the notes removes the generated changelog and its link on the next run.
 - No manual update XML is generated when `manual_en_actualizaciones` is `false`.
@@ -218,7 +218,18 @@ The Spanish documentation records testing on Joomla 6.2.0, including extension d
 
 For XML sources, including language and collection detail feeds, the script copies entries referenced by `changelogurl` that match the offered extension and version. It rewrites the URL to the internal copy and supports relative source URLs.
 
-For `github` sources, it generates changelog XML from the release body when notes exist, retaining Markdown as text.
+For `github` sources, it generates changelog XML from the release body when notes exist.
+
+### How notes are converted
+
+GitHub release notes (Markdown) and `.changelog.txt` files are converted to Joomla's changelog format:
+
+- **One item per line.** Bullets (`-`, `*`, `1.`), checkboxes, bold and code markers are removed; links become `text (url)`. Blank lines and separators are ignored.
+- **Categories from headings.** A recognisable Markdown heading (`## …`) groups the following lines into the matching Joomla category: *Security*, *Fixed*, *Added/New*, *Changed/Improved*, *Removed*, *Language/Translation* (Spanish headings are recognised too). Lines without a heading, or under an unrecognised one, go to *Note*.
+- **Text, never HTML.** Joomla's changelog viewer outputs items as raw HTML, so the script escapes them: notes containing `<script>` are shown as text and never run in the administrator. This also applies to changelogs copied from vendors.
+- **Accented characters.** Each item is written in a CDATA section. Without it, PHP's XML parser splits text at non-ASCII characters and Joomla would show "Menú corregido" as two items, "Men" and "ú corregido".
+
+For list feeds (languages, collections such as Gantry, and manual packages) the changelog link is also set as a `changelogurl` attribute on each list entry: Joomla builds those update rows from the list attributes, not from the detail XML, so without it the button would not appear.
 
 If a declared changelog cannot be downloaded, is invalid, or lacks the matching version, the script omits the link, records the incident, and continues processing the package. The recorded incident produces exit code 1.
 
@@ -232,6 +243,8 @@ After regenerating and copying the output, check for updates in Joomla to refres
 
 ## Limitations and integrity
 
+- **Unverified packages:** every download is compared with the SHA hash published by its source and discarded on mismatch. When a source publishes no hash (some XML feeds, older GitHub assets) there is nothing to compare against; `LEEME.txt`, `index.html` and the console summary flag it as "integridad sin verificar". Plain `http` downloads are flagged too. HTTPS certificates are always verified.
+
 - **Core metadata:** a custom XML channel replaces Joomla's TUF metadata flow. The script reads official targets metadata over HTTPS but does not verify its TUF signatures. ZIP hashes are checked when available. Protect the generated folder and transfer media.
 - **Compatibility:** the script preserves declared XML restrictions; Joomla may refuse to offer an update outside those restrictions. Its branch matching is approximate, and a feed currently retains only one selected update version.
 - **Major upgrades:** core feeds are separated by major version. A major-version migration requires a manual package and the appropriate migration checks.
@@ -239,3 +252,17 @@ After regenerating and copying the output, check for updates in Joomla to refres
 - **Core release notes:** changelog generation for Joomla core is not currently implemented.
 
 Offline Updates is an independent project and is not affiliated with or endorsed by the Joomla! Project or Open Source Matters.
+
+## Tests
+
+The tests need no network access: they simulate every source (core, multi-branch XML feeds, collections, GitHub releases and manual packages) with local files and run the whole mirror.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+They also run on GitHub Actions for every change: Python 3.8 on Windows, 3.10 on Linux and 3.13 on both.
+
+## License
+
+GNU General Public License, version 2 or later (GPL-2.0-or-later). See [LICENSE](LICENSE).

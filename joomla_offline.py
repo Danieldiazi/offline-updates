@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-2.0-or-later
 """
 joomla_offline.py — Espejo de actualizaciones de Joomla para entornos sin internet.
 
@@ -205,11 +206,135 @@ def regex_compatible(regex_tp, version):
         return True
 
 
+def xml_update(element, tipo, version, url_zip, hashes, tp, nombre=None, descripcion="", client="site",
+               folder="", infourl=None, changelogurl=None, extra=None):
+    """XML <updates> con una sola <update>, en el formato que lee Joomla (ExtensionAdapter).
+    tp: expresión de targetplatform (o tupla (nombre, versión)); infourl: (título, url);
+    extra: líneas XML adicionales ya escapadas (php_minimum, maintainer…)."""
+    tp_nombre, tp_version = tp if isinstance(tp, tuple) else ("joomla", tp)
+    partes = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<updates>",
+        "  <update>",
+        "    <name>%s</name>" % escape(nombre or element),
+        "    <description>%s</description>" % escape(descripcion),
+        "    <element>%s</element>" % escape(element),
+        "    <type>%s</type>" % escape(tipo),
+        "    <client>%s</client>" % escape(client),
+    ]
+    if folder:
+        partes.append("    <folder>%s</folder>" % escape(folder))
+    partes.append("    <version>%s</version>" % escape(version))
+    if infourl and infourl[1]:
+        partes.append("    <infourl title=%s>%s</infourl>" % (quoteattr(infourl[0] or ""), escape(infourl[1])))
+    if changelogurl:
+        partes.append("    <changelogurl>%s</changelogurl>" % escape(changelogurl))
+    partes += [
+        "    <downloads>",
+        '      <downloadurl type="full" format="zip">%s</downloadurl>' % escape(url_zip),
+        "    </downloads>",
+        "    <tags>",
+        "      <tag>stable</tag>",
+        "    </tags>",
+    ]
+    partes += ["    " + x for x in (extra or [])]
+    partes.append("    <targetplatform name=%s version=%s/>" % (quoteattr(tp_nombre), quoteattr(tp_version)))
+    for alg in ("sha256", "sha384", "sha512"):
+        if hashes.get(alg):
+            partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
+    partes += ["  </update>", "</updates>"]
+    return "\n".join(partes) + "\n"
+
+
+# Encabezados de notas (Markdown de GitHub o .changelog.txt) -> categorías del changelog de Joomla
+_CATEGORIAS_NOTAS = [
+    ("security", r"secur|segur"),
+    ("fix", r"fix|bug|correg|arregl|correcc"),
+    ("addition", r"add|new|feature|añad|nuev|novedad"),
+    ("remove", r"remov|delet|elimin|quitad|borrad"),
+    ("language", r"lang|transl|idiom|traduc"),
+    ("change", r"chang|improv|updat|cambi|mejor|modific"),
+]
+
+
+def _limpiar_markdown(linea):
+    linea = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", linea)           # imágenes
+    linea = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", linea)       # enlaces
+    linea = re.sub(r"(\*\*|__|`)", "", linea)                            # negrita, código
+    return linea.strip()
+
+
+def items_en_cdata(xml):
+    """Pone el texto de cada <item> de un changelog en una sección CDATA.
+    El analizador de changelogs de Joomla (Changelog::characterData) crea un punto nuevo por
+    cada trozo de texto que le entrega el analizador XML de PHP, y este corta el texto en cada
+    carácter no ASCII: "Menú corregido" se vería como dos puntos, "Men" y "ú corregido".
+    Dentro de CDATA el texto llega entero.
+    Además Joomla pinta los puntos como HTML sin escapar (layouts/joomla/installer/changelog.php),
+    así que el texto se escapa aquí: unas notas con "<script>" se ven como texto y nunca se ejecutan
+    en el administrador."""
+    def cdata(m):
+        contenido = html.escape(html.unescape(m.group(1)), quote=False)
+        return "<item><![CDATA[%s]]></item>" % contenido.replace("]]>", "]]]]><![CDATA[>")
+    return re.sub(r"<item>(.*?)</item>", cdata, xml, flags=re.S)
+
+
+def xml_changelog(element, tipo, version, notas):
+    """Changelog de Joomla (<changelogs>) a partir de notas en texto o Markdown: un <item> por
+    línea, quitando viñetas y formato. Los encabezados reconocibles (Added/Fixed/Security…,
+    Añadido/Corregido/Seguridad…) agrupan las líneas en su categoría; el resto va a <note>.
+    Devuelve None si no queda ninguna línea útil."""
+    grupos, categoria = {}, "note"
+    for linea in notas.splitlines():
+        linea = linea.strip()
+        if not linea or re.fullmatch(r"[-=*_]{3,}", linea):
+            continue
+        m = re.match(r"^#{1,6}\s*(.+?)\s*#*$", linea)
+        if m:
+            titulo = m.group(1).lower()
+            categoria = next((c for c, patron in _CATEGORIAS_NOTAS if re.search(patron, titulo)), "note")
+            continue
+        linea = re.sub(r"^([-*+•]|\d+[.)])\s+", "", linea)
+        linea = re.sub(r"^\[[ xX]\]\s+", "", linea)
+        linea = _limpiar_markdown(linea)
+        if linea:
+            grupos.setdefault(categoria, []).append(linea)
+    if not grupos:
+        return None
+    raiz = ET.Element("changelogs")
+    cambio = ET.SubElement(raiz, "changelog")
+    for k, valor in (("element", element), ("type", tipo), ("version", version)):
+        ET.SubElement(cambio, k).text = valor
+    for categoria in ("security", "fix", "addition", "change", "remove", "language", "note"):
+        if categoria in grupos:
+            nodo = ET.SubElement(cambio, categoria)
+            for item in grupos[categoria]:
+                ET.SubElement(nodo, "item").text = item
+    return items_en_cdata('<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(raiz, encoding="unicode") + "\n")
+
+
+def _changelog_en_entrada(entrada, url):
+    """Pone (o quita) el atributo changelogurl de una entrada <extension> de una lista
+    'collection'. Para las actualizaciones que vienen de una lista, Joomla (CollectionAdapter)
+    guarda en #__updates los atributos de la entrada, no los del XML de detalle: sin este
+    atributo, el botón Changelog de Sistema > Actualizar no aparece."""
+    if url:
+        entrada.set("changelogurl", url)
+    elif "changelogurl" in entrada.attrib:
+        del entrada.attrib["changelogurl"]
+
+
+MAX_MANIFIESTO = 1024 * 1024   # bytes
+
+
 def leer_manifiesto_zip(ruta_zip):
     """Lee el XML de instalación de la raíz del ZIP y deduce element/type/client/folder."""
     with zipfile.ZipFile(ruta_zip) as z:
         # Como el instalador de Joomla: primero la raíz del ZIP, luego un nivel de carpeta
-        xmls = [n for n in z.namelist() if n.lower().endswith(".xml") and not n.endswith("/")]
+        # Un manifiesto real ocupa pocos KB: se ignoran XML enormes (ZIP malformados o "zip bombs")
+        xmls = [i.filename for i in z.infolist()
+                if i.filename.lower().endswith(".xml") and not i.filename.endswith("/")
+                and i.file_size <= MAX_MANIFIESTO]
         candidatos = ([n for n in xmls if n.count("/") == 0] + [n for n in xmls if n.count("/") == 1])
         for nombre in candidatos:
             try:
@@ -343,6 +468,8 @@ class Espejo:
         self.conservar = bool(config.get("conservar_versiones_anteriores", False))
         self.origen_manual = os.path.abspath(os.path.join(base_dir, config.get("carpeta_manual", "manual")))
         self.manuales = []          # (ruta relativa en el espejo, bytes, fecha, estado)
+        self.verificacion = {}      # ruta relativa del ZIP -> avisos de verificación
+        self._ultimo_changelog = None
         self.ruta_estado = os.path.join(self.salida, "estado.json")
         self.estado_anterior = self._cargar_estado()
         self.estado = {"items": {}}
@@ -390,6 +517,21 @@ class Espejo:
             "cambio": cambio, "archivos": archivos or previo.get("archivos", []),
             "avisos": avisos or [], "detalle": detalle,
         })
+
+    def _descargar(self, urls, rel, esperados):
+        """descargar_de_alguna + anotación de cómo se ha verificado la descarga, para avisar en
+        LEEME.txt de los paquetes que no se han podido comprobar (sin hash publicado) o que
+        llegan por http sin cifrar."""
+        hashes, usada = descargar_de_alguna(urls, os.path.join(self.salida, rel), esperados)
+        avisos = []
+        if not {k: v for k, v in (esperados or {}).items() if v}:
+            avisos.append("la fuente no publica hash: integridad sin verificar")
+        origen = usada or (urls[0] if urls else "")
+        if origen.lower().startswith("http://"):
+            avisos.append("descargado por http (sin cifrar)" + (
+                "; el hash publicado sí coincide" if esperados else ""))
+        self.verificacion[rel.replace(os.sep, "/")] = avisos
+        return hashes
 
     def url(self, rel):
         return self.url_base + "/" + rel.replace(os.sep, "/")
@@ -442,7 +584,7 @@ class Espejo:
             rel = os.path.join("core", fichero)
             try:
                 log("   %s -> %s" % (version, fichero))
-                hashes, _ = descargar_de_alguna(urls, os.path.join(self.salida, rel), t.get("hashes", {}))
+                hashes = self._descargar(urls, rel, t.get("hashes", {}))
             except ErrorEspejo as e:
                 self._registrar(clave, nombre, version, [], ok=False, detalle=str(e))
                 self.errores.append("Core %s: %s" % (version, e))
@@ -466,39 +608,19 @@ class Espejo:
         info = c.get("infourl") or {}
         tp = c.get("targetplatform") or {"name": "joomla", "version": ".*"}
         dbs = c.get("supported_databases") or {}
-        partes = [
-            '<?xml version="1.0" encoding="utf-8"?>',
-            "<updates>",
-            "  <update>",
-            "    <name>%s</name>" % escape(c.get("name", "Joomla! " + c["version"])),
-            "    <description>%s</description>" % escape(c.get("description", "")),
-            "    <element>joomla</element>",
-            "    <type>file</type>",
-            "    <client>site</client>",
-            "    <version>%s</version>" % escape(c["version"]),
-        ]
-        if info.get("url"):
-            partes.append("    <infourl title=%s>%s</infourl>" % (quoteattr(info.get("title", "")), escape(info["url"])))
-        partes += [
-            "    <downloads>",
-            '      <downloadurl type="full" format="zip">%s</downloadurl>' % escape(url_zip),
-            "    </downloads>",
-            "    <tags>",
-            "      <tag>stable</tag>",
-            "    </tags>",
-            "    <maintainer>%s</maintainer>" % escape(c.get("maintainer", "Joomla! Production Department")),
-            "    <maintainerurl>%s</maintainerurl>" % escape(c.get("maintainerurl", "https://www.joomla.org")),
-            "    <targetplatform name=%s version=%s/>" % (quoteattr(tp.get("name", "joomla")), quoteattr(tp.get("version", ".*"))),
+        extra = [
+            "<maintainer>%s</maintainer>" % escape(c.get("maintainer", "Joomla! Production Department")),
+            "<maintainerurl>%s</maintainerurl>" % escape(c.get("maintainerurl", "https://www.joomla.org")),
         ]
         if c.get("php_minimum"):
-            partes.append("    <php_minimum>%s</php_minimum>" % escape(c["php_minimum"]))
+            extra.append("<php_minimum>%s</php_minimum>" % escape(c["php_minimum"]))
         if dbs:
-            attrs = " ".join("%s=%s" % (k, quoteattr(str(v))) for k, v in sorted(dbs.items()))
-            partes.append("    <supported_databases %s/>" % attrs)
-        for alg in ("sha256", "sha384", "sha512"):
-            partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
-        partes += ["  </update>", "</updates>"]
-        return "\n".join(partes) + "\n"
+            extra.append("<supported_databases %s/>"
+                         % " ".join("%s=%s" % (k, quoteattr(str(v))) for k, v in sorted(dbs.items())))
+        return xml_update("joomla", "file", c["version"], url_zip, hashes,
+                          (tp.get("name", "joomla"), tp.get("version", ".*")),
+                          nombre=c.get("name", "Joomla! " + c["version"]), descripcion=c.get("description", ""),
+                          infourl=(info.get("title", ""), info.get("url")), extra=extra)
 
     # ---- idiomas ---------------------------------------------------------- #
 
@@ -542,6 +664,7 @@ class Espejo:
                 nueva = ET.Element("extension", dict(ext.attrib))
                 nueva.set("detailsurl", self.url(rel_det))
                 nueva.set("version", version)
+                _changelog_en_entrada(nueva, self._ultimo_changelog)
                 nuevas.append(nueva)
                 self._registrar(clave, nombre, version, [rel_zip])
             if nuevas:
@@ -576,14 +699,11 @@ class Espejo:
                 notas = (release.get("body") or "").strip()
                 if not notas or release.get("draft") or release.get("prerelease"):
                     return
-                raiz = ET.Element("changelogs")
-                cambio = ET.SubElement(raiz, "changelog")
-                for k in ("element", "type", "version"):
-                    ET.SubElement(cambio, k).text = texto(update, k)
-                ET.SubElement(ET.SubElement(cambio, "note"), "item").text = notas
+                xml = xml_changelog(texto(update, "element"), texto(update, "type"), version, notas)
+                if not xml:
+                    return
                 rel = os.path.splitext(rel_xml)[0] + "-changelog.xml"
-                self.escribir(rel, '<?xml version="1.0" encoding="utf-8"?>\n'
-                              + ET.tostring(raiz, encoding="unicode") + "\n")
+                self.escribir(rel, xml)
                 ET.SubElement(update, "changelogurl").text = self.url(rel)
             except (ErrorEspejo, ValueError, OSError) as e:
                 aviso = "%s: notas de GitHub no disponibles (%s)" % (nombre, e)
@@ -618,8 +738,8 @@ class Espejo:
                     item.text = contenido
                 salida.append(c)
             rel = os.path.splitext(rel_xml)[0] + "-changelog.xml"
-            self.escribir(rel, '<?xml version="1.0" encoding="utf-8"?>\n'
-                          + ET.tostring(salida, encoding="unicode") + "\n")
+            self.escribir(rel, items_en_cdata('<?xml version="1.0" encoding="utf-8"?>\n'
+                                              + ET.tostring(salida, encoding="unicode") + "\n"))
             ET.SubElement(update, "changelogurl").text = self.url(rel)
         except (ErrorEspejo, ET.ParseError, OSError) as e:
             aviso = "%s: changelog no disponible (%s)" % (nombre, e)
@@ -658,7 +778,7 @@ class Espejo:
         fichero = nombre_desde_url(urls[0])
         rel_zip = "%s/%s" % (carpeta_rel, fichero)
         log("   %s %s -> %s" % (nombre, version, fichero))
-        hashes, _ = descargar_de_alguna(urls, os.path.join(self.salida, rel_zip), esperados)
+        hashes = self._descargar(urls, rel_zip, esperados)
         self._espejar_changelog(u, url_xml, rel_xml, nombre)
         # Reescribir descargas: una sola, local
         descargas = u.find("downloads")
@@ -678,6 +798,9 @@ class Espejo:
         self.escribir(rel_xml, '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(salida, encoding="unicode") + "\n")
         tp = u.find("targetplatform")
         self._ultimo_tp = tp.get("version") if tp is not None else None
+        # Para las listas (collection) que apuntan a este XML: Joomla guarda la fila de la
+        # actualización con los atributos de la entrada de la lista, no con este XML de detalle
+        self._ultimo_changelog = texto(u, "changelogurl") or None
         return version, rel_zip
 
     # ---- extensiones ------------------------------------------------------ #
@@ -744,7 +867,7 @@ class Espejo:
         fichero = nombre_desde_url(a["name"])
         rel_zip = "%s/%s" % (carpeta, fichero)
         log("   %s %s -> %s" % (nombre, rel.get("tag_name"), fichero))
-        hashes, _ = descargar_de_alguna([a["browser_download_url"]], os.path.join(self.salida, rel_zip), esperados)
+        hashes = self._descargar([a["browser_download_url"]], rel_zip, esperados)
         info = leer_manifiesto_zip(os.path.join(self.salida, rel_zip))
         for k in ("element", "type", "client", "folder"):
             if ext.get(k):
@@ -752,45 +875,17 @@ class Espejo:
         version = info["version"] or str(rel.get("tag_name", "")).lstrip("vV")
         tp = ext.get("targetplatform") or "(%s)\\." % "|".join(re.escape(r) for r in self.ramas)
         self._ultimo_tp = tp
-        partes = [
-            '<?xml version="1.0" encoding="utf-8"?>',
-            "<updates>",
-            "  <update>",
-            "    <name>%s</name>" % escape(info["nombre"] or nombre),
-            "    <description>%s</description>" % escape(nombre),
-            "    <element>%s</element>" % escape(info["element"]),
-            "    <type>%s</type>" % escape(info["type"]),
-            "    <client>%s</client>" % escape(info["client"]),
-        ]
-        if info["folder"]:
-            partes.append("    <folder>%s</folder>" % escape(info["folder"]))
-        partes += [
-            "    <version>%s</version>" % escape(version),
-            "    <infourl title=%s>%s</infourl>" % (quoteattr(nombre), escape(rel.get("html_url", ""))),
-            "    <downloads>",
-            '      <downloadurl type="full" format="zip">%s</downloadurl>' % escape(self.url(rel_zip)),
-            "    </downloads>",
-            "    <tags>",
-            "      <tag>stable</tag>",
-            "    </tags>",
-            '    <targetplatform name="joomla" version=%s/>' % quoteattr(tp),
-        ]
-        for alg in ("sha256", "sha384", "sha512"):
-            partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
-        partes += ["  </update>", "</updates>"]
-        notas = (rel.get("body") or "").strip()
-        if notas:
-            cambios = ET.Element("changelogs")
-            cambio = ET.SubElement(cambios, "changelog")
-            for k, valor in (("element", info["element"]), ("type", info["type"]), ("version", version)):
-                ET.SubElement(cambio, k).text = valor
-            # GitHub entrega Markdown; se conserva como texto sin ejecutar HTML.
-            ET.SubElement(ET.SubElement(cambio, "note"), "item").text = notas
+        url_cambios = None
+        xml_cambios = xml_changelog(info["element"], info["type"], version, rel.get("body") or "")
+        if xml_cambios:
             rel_cambios = os.path.splitext(rel_xml)[0] + "-changelog.xml"
-            self.escribir(rel_cambios, '<?xml version="1.0" encoding="utf-8"?>\n'
-                          + ET.tostring(cambios, encoding="unicode") + "\n")
-            partes.insert(-2, "    <changelogurl>%s</changelogurl>" % escape(self.url(rel_cambios)))
-        self.escribir(rel_xml, "\n".join(partes) + "\n")
+            self.escribir(rel_cambios, xml_cambios)
+            url_cambios = self.url(rel_cambios)
+        xml = xml_update(info["element"], info["type"], version, self.url(rel_zip), hashes, tp,
+                         nombre=info["nombre"] or nombre, descripcion=nombre, client=info["client"],
+                         folder=info["folder"], infourl=(nombre, rel.get("html_url", "")),
+                         changelogurl=url_cambios)
+        self.escribir(rel_xml, xml)
         return version, rel_zip, info["servidores"], info
 
     def _compatible_con_ramas(self, regex_tp):
@@ -836,7 +931,8 @@ class Espejo:
                 try:
                     self._ultimo_tp = None
                     version, rel_zip = self._espejar_xml_updates(det, carpeta, rel_det, sub)
-                    replicados[det] = (self.url(rel_det), version, rel_zip, self._ultimo_tp)
+                    replicados[det] = (self.url(rel_det), version, rel_zip, self._ultimo_tp,
+                                       self._ultimo_changelog)
                 except (ErrorEspejo, KeyError) as err:
                     replicados[det] = err
             r = replicados[det]
@@ -844,9 +940,10 @@ class Espejo:
                 self._registrar(clave, sub, None, [], ok=False, detalle=str(r))
                 self.errores.append("%s: %s" % (sub, r))
                 continue
-            url_local, version, rel_zip, tp = r
+            url_local, version, rel_zip, tp, url_changelog = r
             nueva = ET.Element("extension", dict(e.attrib))
             nueva.set("detailsurl", url_local)
+            _changelog_en_entrada(nueva, url_changelog)
             nueva.set("version", version)
             nuevas.append(nueva)
             if not any(x["nombre"] == sub for x in self.resultados):
@@ -981,28 +1078,9 @@ class Espejo:
         hashes = hashes_de_fichero(ruta_zip)
         tp = "|".join(re.escape(r) + r"\." for r in self.ramas)
         tp = "(%s)" % tp if len(self.ramas) > 1 else tp
-        partes = [
-            '<?xml version="1.0" encoding="utf-8"?>',
-            "<updates>",
-            "  <update>",
-            "    <name>%s</name>" % escape(self.NOMBRE_PAQUETE),
-            "    <description>%s</description>" % escape("Fuentes del espejo local " + self.url_base),
-            "    <element>%s</element>" % self.ELEMENTO_PAQUETE,
-            "    <type>file</type>",
-            "    <client>site</client>",
-            "    <version>%s</version>" % escape(version),
-            "    <downloads>",
-            '      <downloadurl type="full" format="zip">%s</downloadurl>' % escape(self.url(self.ZIP_PAQUETE)),
-            "    </downloads>",
-            "    <tags>",
-            "      <tag>stable</tag>",
-            "    </tags>",
-            '    <targetplatform name="joomla" version=%s/>' % quoteattr(tp),
-        ]
-        for alg in ("sha256", "sha384", "sha512"):
-            partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
-        partes += ["  </update>", "</updates>"]
-        self.escribir(self.XML_PAQUETE, "\n".join(partes) + "\n")
+        xml = xml_update(self.ELEMENTO_PAQUETE, "file", version, self.url(self.ZIP_PAQUETE), hashes, tp,
+                         nombre=self.NOMBRE_PAQUETE, descripcion="Fuentes del espejo local " + self.url_base)
+        self.escribir(self.XML_PAQUETE, xml)
 
     # ---- paquetes descargados a mano ------------------------------------- #
 
@@ -1027,6 +1105,10 @@ class Espejo:
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             for f in sorted(ficheros):
                 if f.startswith(".") or f.lower() in ("thumbs.db", "desktop.ini"):
+                    continue
+                # Las notas de versión (<paquete>.changelog.txt) se leen desde el origen y se
+                # publican como changelog de Joomla; no son paquetes, así que ni se copian ni se listan
+                if f.lower().endswith(".changelog.txt"):
                     continue
                 src = os.path.join(raiz, f)
                 rel = os.path.relpath(src, self.origen_manual).replace(os.sep, "/")
@@ -1090,56 +1172,34 @@ class Espejo:
         for (tipo, element, cliente, folder), (version, rel, info) in sorted(mejores.items()):
             hashes = hashes_de_fichero(os.path.join(self.salida, *rel.split("/")))
             nombre_det = slug("%s-%s-%s" % (tipo, folder, element)) + ".xml"
-            partes = [
-                '<?xml version="1.0" encoding="utf-8"?>',
-                "<updates>",
-                "  <update>",
-                "    <name>%s</name>" % escape(info["nombre"] or element),
-                "    <description>%s</description>" % escape("Paquete manual: " + rel),
-                "    <element>%s</element>" % escape(element),
-                "    <type>%s</type>" % escape(tipo),
-                "    <client>%s</client>" % escape(cliente),
-            ]
-            if folder:
-                partes.append("    <folder>%s</folder>" % escape(folder))
-            partes += [
-                "    <version>%s</version>" % escape(version),
-                "    <downloads>",
-                '      <downloadurl type="full" format="zip">%s</downloadurl>' % escape(self.url(rel)),
-                "    </downloads>",
-                "    <tags>",
-                "      <tag>stable</tag>",
-                "    </tags>",
-                '    <targetplatform name="joomla" version=%s/>' % quoteattr(tp),
-            ]
-            for alg in ("sha256", "sha384", "sha512"):
-                partes.append("    <%s>%s</%s>" % (alg, hashes[alg], alg))
-            partes += ["  </update>", "</updates>"]
+            url_notas = None
             ruta_notas = os.path.splitext(os.path.join(self.origen_manual, *rel.split("/")[1:]))[0] + ".changelog.txt"
             if os.path.isfile(ruta_notas):
                 try:
                     with open(ruta_notas, encoding="utf-8-sig") as f:
-                        notas = f.read().strip()
-                    if notas:
-                        cambios = ET.Element("changelogs")
-                        cambio = ET.SubElement(cambios, "changelog")
-                        for k, valor in (("element", element), ("type", tipo), ("version", version)):
-                            ET.SubElement(cambio, k).text = valor
-                        ET.SubElement(ET.SubElement(cambio, "note"), "item").text = notas
+                        xml_notas = xml_changelog(element, tipo, version, f.read())
+                    if xml_notas:
                         rel_notas = carpeta + "/" + os.path.splitext(nombre_det)[0] + "-changelog.xml"
-                        self.escribir(rel_notas, '<?xml version="1.0" encoding="utf-8"?>\n'
-                                      + ET.tostring(cambios, encoding="unicode") + "\n")
-                        partes.insert(-2, "    <changelogurl>%s</changelogurl>" % escape(self.url(rel_notas)))
+                        self.escribir(rel_notas, xml_notas)
+                        url_notas = self.url(rel_notas)
+                        self.manual_info[rel] += " · con notas de versión"
                 except (OSError, UnicodeError) as e:
                     aviso = "%s: no se pudieron leer las notas manuales (%s)" % (rel, e)
                     log("   AVISO: " + aviso)
                     self.errores.append(aviso)
-            self.escribir("%s/%s" % (carpeta, nombre_det), "\n".join(partes) + "\n")
+            xml = xml_update(element, tipo, version, self.url(rel), hashes, tp,
+                             nombre=info["nombre"] or element, descripcion="Paquete manual: " + rel,
+                             client=cliente, folder=folder, changelogurl=url_notas)
+            self.escribir("%s/%s" % (carpeta, nombre_det), xml)
             attrs = {"name": info["nombre"] or element, "element": element, "type": tipo,
                      "client": cliente, "version": version, "targetplatformversion": tp,
                      "detailsurl": self.url("%s/%s" % (carpeta, nombre_det))}
             if folder:
                 attrs["folder"] = folder
+            if url_notas:
+                # Joomla crea la fila de la actualización con los atributos de esta entrada de
+                # la lista; el <changelogurl> del XML de detalle no llega al botón Changelog
+                attrs["changelogurl"] = url_notas
             entradas.append(" ".join("%s=%s" % (k, quoteattr(v)) for k, v in attrs.items()))
             self.manual_info[rel] = "en Actualizar: " + self.manual_info[rel]
         # ZIP que no son la versión más alta de su extensión
@@ -1165,6 +1225,8 @@ class Espejo:
             l.append("* %s — %s   [%s]" % (r["nombre"], r["version"] or "?", r["cambio"]))
             for a in r["archivos"]:
                 l.append("    %s" % a)
+                for v in self.verificacion.get(a, []):
+                    l.append("      AVISO: %s" % v)
             for a in r["avisos"]:
                 l.append("    AVISO: %s" % a)
             if r["detalle"]:
@@ -1217,7 +1279,8 @@ class Espejo:
         for r in self.resultados:
             enlaces = " ".join('<a href="%s">%s</a>' % (html.escape(a), html.escape(os.path.basename(a)))
                                for a in r["archivos"])
-            avisos = "".join('<div class="aviso">%s</div>' % html.escape(a) for a in r["avisos"])
+            avisos = "".join('<div class="aviso">%s</div>' % html.escape(a)
+                             for a in r["avisos"] + [v for f in r["archivos"] for v in self.verificacion.get(f, [])])
             if r["detalle"]:
                 avisos += '<div class="error">%s</div>' % html.escape(r["detalle"])
             filas.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s%s</td></tr>" % (
@@ -1262,6 +1325,8 @@ td,th{border-bottom:1px solid #ddd;padding:.5rem;text-align:left;vertical-align:
         log("Carpeta lista: %s" % self.salida)
         for r in self.resultados:
             log("  %-40s %-12s %s" % (r["nombre"], r["version"] or "?", r["cambio"]))
+            for v in sorted({v for f in r["archivos"] for v in self.verificacion.get(f, [])}):
+                log("      AVISO: %s" % v)
         log("")
         if self.manuales:
             log("Paquetes manuales (%s):" % self.origen_manual)

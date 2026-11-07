@@ -173,6 +173,8 @@ Probado en un Joomla 6.2.0 real: con el sitio original de la extensión desactiv
 
 ## Cosas a tener en cuenta
 
+- **Paquetes sin verificar.** El script compara cada descarga con el hash SHA que publica su fuente y la descarta si no coincide. Cuando la fuente no publica hash (algunos XML, assets de GitHub antiguos), no hay con qué comparar: `LEEME.txt`, `index.html` y el resumen en pantalla lo indican con «la fuente no publica hash: integridad sin verificar». También avisan cuando algo se descarga por `http` sin cifrar. Los certificados HTTPS se verifican siempre.
+
 - **Seguridad del core.** Con el canal "URL personalizada" Joomla usa el formato XML clásico en lugar de TUF, que es la verificación con firma criptográfica de los metadatos. Joomla sigue comprobando el SHA-512 del ZIP, pero ese hash lo aporta tu espejo. Este script lo obtiene del repositorio oficial por HTTPS y verifica la descarga con él, así que la cadena queda protegida hasta tu USB. A partir de ahí, la integridad depende de quién tenga acceso a la carpeta.
 - **Compatibilidad declarada.** Si una extensión no declara compatibilidad con tu versión de Joomla, Joomla no ofrecerá su actualización, y `LEEME.txt` lo avisa. Ejemplo actual: Attachments 4.2.5 declara hasta Joomla 6.1. Mientras su autor no lo amplíe, en un 6.2 hay que subirla a mano. Con internet pasaría exactamente lo mismo.
 - **Cambio de versión mayor** (5 → 6). Cada sitio solo ve actualizaciones de su propia rama. El salto de mayor se hace subiendo el paquete a mano, tras las comprobaciones previas que pide Joomla.
@@ -180,7 +182,9 @@ Probado en un Joomla 6.2.0 real: con el sitio original de la extensión desactiv
 
 ## Registro de cambios
 
-El espejo copia el changelog declarado mediante `changelogurl` en las fuentes XML (también idiomas y colecciones), conserva las entradas de la extensión y versión publicadas y cambia el enlace a una URL interna. Admite URLs relativas. Para fuentes de tipo `github`, genera el changelog a partir del cuerpo de la release, si existe, conservando Markdown como texto. No modifica los ZIP.
+El espejo copia el changelog declarado mediante `changelogurl` en las fuentes XML (también idiomas y colecciones), conserva las entradas de la extensión y versión publicadas y cambia el enlace a una URL interna. Admite URLs relativas. Para fuentes de tipo `github`, genera el changelog a partir del cuerpo de la release, si existe. No modifica los ZIP.
+
+En las listas (idiomas, colecciones como Gantry y paquetes manuales), el enlace al changelog se pone también como atributo `changelogurl` de cada entrada de la lista: Joomla crea la fila de esas actualizaciones con los atributos de la lista, no con el XML de detalle, y sin ese atributo el botón no aparecería.
 
 Si falla un changelog declarado o no contiene la versión requerida, omite su enlace y registra la incidencia sin bloquear el paquete; termina con código 1. Después de regenerar y copiar el espejo, busca actualizaciones en Joomla para refrescar los metadatos.
 
@@ -188,6 +192,38 @@ Si falla un changelog declarado o no contiene la versión requerida, omite su en
 
 Si falta `changelogurl` y el ZIP se descarga de github.com/propietario/repositorio/releases/download/tag/, el script consulta las notas de ese tag exacto. Solo las publica si el tag (sin prefijo v/V) coincide con la versión del XML y la release tiene notas y no es preliminar ni borrador. No usa la última release indiscriminadamente. El XML original sigue determinando el paquete y la compatibilidad. Esta alternativa no se aplica al core, que tiene otro procesamiento.
 
+### Cómo se convierten las notas
+
+Las notas de GitHub (Markdown) y los `.changelog.txt` se convierten al formato de changelog de Joomla así:
+
+- **Un punto por línea.** Se quitan viñetas (`-`, `*`, `1.`), casillas, negritas y código; los enlaces quedan como `texto (url)`. Las líneas vacías y los separadores se ignoran.
+- **Categorías por encabezado.** Un encabezado Markdown (`## …`) reconocible agrupa las líneas siguientes en su categoría de Joomla: *Security/Seguridad*, *Fixed/Corregido*, *Added/Añadido/Nuevo*, *Changed/Mejorado/Cambiado*, *Removed/Eliminado*, *Language/Traducción*. Sin encabezado, o con uno no reconocido, las líneas van a *Nota*.
+- **Texto, nunca HTML.** El visor de changelogs de Joomla muestra los puntos como HTML sin escapar, así que el script escapa el texto: unas notas con `<script>` se ven como texto y no se ejecutan en el administrador. Esto se aplica también a los changelogs copiados de los fabricantes.
+- **Acentos.** Cada punto se escribe en una sección CDATA. Sin ella, el analizador de PHP corta el texto en los caracteres no ASCII y Joomla mostraría «Menú corregido» como dos puntos, «Men» y «ú corregido».
+
+Ejemplo de `.changelog.txt`:
+
+```text
+## Corregido
+- Menú móvil en pantallas pequeñas
+## Añadido
+- Nueva posición de módulo «banner»
+```
+
 ### Notas de paquetes manuales
 
-Junto a `manual/plantilla-2.1.zip`, puedes crear `manual/plantilla-2.1.changelog.txt` en UTF-8 con las novedades. Funciona también en subcarpetas. El script genera el XML y el enlace local para el botón Registro de cambios de Joomla, usando la identidad y versión del manifiesto del ZIP seleccionado. Solo publica notas de la versión más alta ofrecida. Sin archivo o con texto vacío, ofrece la actualización sin notas. Los textos se guardan como texto XML escapado, sin convertir Markdown a HTML. Si el archivo no se puede leer, registra la incidencia y continúa con el paquete. Con `manual_en_actualizaciones: false` no genera estos XML. Al retirar las notas, desaparecen el changelog generado y su enlace en la siguiente ejecución.
+Junto a `manual/plantilla-2.1.zip`, puedes crear `manual/plantilla-2.1.changelog.txt` en UTF-8 con las novedades. Funciona también en subcarpetas. El script genera el XML y el enlace local para el botón Registro de cambios de Joomla, usando la identidad y versión del manifiesto del ZIP seleccionado. Solo publica notas de la versión más alta ofrecida. Sin archivo o con texto vacío, ofrece la actualización sin notas. El formato de las notas se explica en «Cómo se convierten las notas». Si el archivo no se puede leer, registra la incidencia y continúa con el paquete. Con `manual_en_actualizaciones: false` no genera estos XML. Al retirar las notas, desaparecen el changelog generado y su enlace en la siguiente ejecución.
+
+## Pruebas
+
+Las pruebas no necesitan conexión: simulan todas las fuentes (core, XML con varias ramas, colecciones, releases de GitHub y paquetes manuales) con ficheros locales y ejecutan el espejo completo.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Se ejecutan también en GitHub Actions con cada cambio: Python 3.8 en Windows, 3.10 en Linux y 3.13 en los dos.
+
+## Licencia
+
+GNU General Public License, versión 2 o posterior (GPL-2.0-or-later). Ver [LICENSE](LICENSE).
